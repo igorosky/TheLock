@@ -1,0 +1,6 @@
+*.pub
+*.priv
+password
+dist
+build
+*.spec
