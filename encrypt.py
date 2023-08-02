@@ -1,10 +1,8 @@
 import os
 import sys
-import rsa                              # pip install rsa
-from cryptography.fernet import Fernet  # pip install cryptography
-import pyminizip                        # pip install pyminizip
-import shutil
+import rsa
 import argparse
+import theLockLib
 
 
 # Script Location
@@ -14,153 +12,149 @@ if getattr(sys, 'frozen', False):
 
 
 RSA_FROM_FILE = True
-KEY_FILE_NAME = f"{SL}/key.pub"
+KEY_FILE_NAME = os.path.normpath(f"{SL}/key.pub")
 STATIC_KEY = b"""
 
 """
 
 ARCHIVE_PASSWORD_NONE = False
 ARCHIVE_PASSWORD_FROM_FILE = True
-ARCHIVE_PASSWORD_FILE_NAME = f"{SL}/password"
+ARCHIVE_PASSWORD_FILE_NAME = os.path.normpath(f"{SL}/password")
 ARCHIVE_PASSWORD = "zaq1@WSX"
+ARCHIVE_PART_SIZE = 512
 
-TMP_FOLDER_NAME = f"{SL}/tmp"
-KEY_EXTENSION = "key"
-FINAL_EXTENSION = "encrypted"
+TMP_FOLDER_NAME = os.path.normpath(f"{SL}/tmp")
+FINAL_EXTENSION = ".encrypted"
+COMPRESSION_LEVEL = 9
 
 
-def getRsaKey() -> None:
+def getRsaKey() -> rsa.PublicKey:
     global rsa_key
     try:
-        if rsa_key is not None:
-            return
+        if rsa_key is rsa.PublicKey:
+            return rsa_key
     except NameError:
         pass
-    rsa_key = STATIC_KEY
     if RSA_FROM_FILE:
-        if not os.path.exists(KEY_FILE_NAME):
-            print("No RSA public key found")
-            sys.exit()
-        with open(KEY_FILE_NAME, 'rb') as file:
-            rsa_key = file.read()
-    rsa_key = rsa.PublicKey.load_pkcs1(rsa_key)
+        rsa_key = theLockLib.getRsaPublicKeyFromFile(KEY_FILE_NAME)
+    else:
+        rsa_key = rsa.PublicKey.load_pkcs1(STATIC_KEY)
+    return rsa_key
 
 
-def getArchivePassword() -> None:
+def getArchivePassword() -> str | None:
     global archive_password
     if ARCHIVE_PASSWORD_NONE:
-        archive_password = ''
-        return
+        archive_password = None
+        return None
     try:
         if archive_password is not None:
-            return
+            return archive_password
     except NameError:
         pass
     archive_password = ARCHIVE_PASSWORD
     if ARCHIVE_PASSWORD_FROM_FILE:
         if not os.path.exists(ARCHIVE_PASSWORD_FILE_NAME):
-            print("No password file")
-            sys.exit()
+            raise FileNotFoundError("No password file")
         with open(ARCHIVE_PASSWORD_FILE_NAME, 'r') as file:
             archive_password = file.read().strip()
+    return archive_password
 
 
-def inputYN(msg: str, default: bool | None = None,
-    tryAgain: str | None = "Invalid input. Try again" ,
-    y: str = 'Y', n: str = 'N', defaultWord: str = "default") -> bool:
-    if default is not None:
-        dw = n
-        if default:
-            dw = y
-        msg = f"{msg} ({defaultWord}: {dw}) ({y}/{n}): "
-    else:
-        msg = f"{msg} ({y}/{n}): "
-    v = input(msg).strip().lower()
-    if tryAgain is not None:
-        msg = f"{tryAgain}: "
-    while len(v) > 1 or (len(v) == 0 and default is None) \
-        or (len(v) != 0 and v[0] != 'y' and v[0] != 'n'):
-        v = input(msg).strip().lower()
-    return (len(v) == 0 and default is not None) or v[0] == 'y'
-
-
-def deleteTmpFolder() -> None:
-    shutil.rmtree(TMP_FOLDER_NAME)
-    
-
-def prepareTmpFolder() -> None:
-    if os.path.exists(TMP_FOLDER_NAME):
-        print(f"Folder with name {TMP_FOLDER_NAME} already exists",
-              "it maybe caused by program crash or you created",
-              "anyway please get rid of it or rename it", sep=', ')
-        if inputYN("Do you want to delete it", True):
-            deleteTmpFolder()
-        else:
-            sys.exit()
-    os.mkdir(TMP_FOLDER_NAME)
-
-
-def symeticEncrypt(path: str) -> None:
-    key = Fernet.generate_key()
-    fernet = Fernet(key)
-    with open(path, 'rb') as file:
-        content = file.read()
-    filename = os.path.basename(path)
-    with open(f"{TMP_FOLDER_NAME}/{filename}.{KEY_EXTENSION}", 'wb') as file:
-        file.write(key)
-    content = fernet.encrypt(content)
-    with open(f"{TMP_FOLDER_NAME}/{filename}", 'wb') as file:
-        file.write(content)
-
-
-def asyncKeyEncrypt(path: str) -> None:
-    with open(path, 'rb') as file:
-        content = file.read()
-    getRsaKey()
-    content = rsa.encrypt(content, rsa_key)
-    with open(path, 'wb') as file:
-        file.write(content)
-
-
-def encryptFile(path: str) -> None:
-    prepareTmpFolder()
-    symeticEncrypt(path)
-    filename = os.path.basename(path)
-    filepath = f"{TMP_FOLDER_NAME}/{filename}"
-    asyncKeyEncrypt(f"{filepath}.{KEY_EXTENSION}")
-    getArchivePassword()
-    pyminizip.compress_multiple(
-        [filepath, f"{filepath}.{KEY_EXTENSION}"],
-        [],
-        f"{path}.{FINAL_EXTENSION}",
-        archive_password,
-        9
-    )
-    deleteTmpFolder()
-
-
-def encrypt(path: str) -> None:
-    if os.path.isfile(path):
-        if os.path.exists(f'{path}.{FINAL_EXTENSION}'):
-            return
-        encryptFile(path)
-        return
-    files = os.listdir(path)
-    for file in files:
-        encrypt(f"{path}/{file}")
-
-
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument('filename', type=str)
-    parser.add_argument('-np', '--nopassword', action='store_true')
+    parser.add_argument('filename', type=str, help="File or folder to encrypt")
+    parser.add_argument('-np', '--nopassword', action='store_true',
+        help="Skip additional password encyption (password file required)")
+    parser.add_argument('-r', '--recursive', action='store_true',
+        help="Instead encypting whole folder encrypt every file in it")
+    parser.add_argument('-f', '--force', action='store_true',
+        help="Rencrypt files and override encrypted files")
+    parser.add_argument('-o', '--output', type=str, action='store',
+        help="Target file or folder in case of recursion")
+    parser.add_argument('-c', '--archive-compression-level', type=int, action='store',
+        default=COMPRESSION_LEVEL,
+        help=f"Level of compression 0-9 (default: {COMPRESSION_LEVEL})")
+    parser.add_argument('-s', '--part-size', type=int, action='store',
+        default=ARCHIVE_PART_SIZE,
+        help=f"Max size of one file part in MB (default: {ARCHIVE_PART_SIZE}MB)")
+    parser.add_argument('-p', '--password', type=str, help="Password", action='store')
+    global ARCHIVE_PASSWORD_FILE_NAME
+    parser.add_argument('-pf', '--password-file', type=str, action='store',
+        default=ARCHIVE_PASSWORD_FILE_NAME,
+        help=f"File with password (default: {ARCHIVE_PASSWORD_FILE_NAME})")
+    parser.add_argument('-e', '--extension', type=str, action='store',
+        default=FINAL_EXTENSION,
+        help=f"File suffix added to encrypted files (default: {FINAL_EXTENSION})")
+    parser.add_argument('-k', '--skip', action='store', nargs='*',
+        default=[FINAL_EXTENSION], help="Skip files with given suffixes")
+    parser.add_argument('-v', '--verbose', action='store_true',
+        help="Verbose mode that print affected files")
+    parser.add_argument('-vp', '--verbose-pretty', action='store_true',
+        help="Verbose mode that print more information")
+    parser.add_argument('-va', '--verbose-all', action='store_true',
+        help="Verbose mode that print more information")
     args = parser.parse_args()
+    args.filename = os.path.normpath(args.filename)
     if not os.path.exists(args.filename):
         print('No such file or directory exists')
         return
+    if args.output is None:
+        args.output = args.filename
+    if args.password is not None:
+        global archive_password
+        archive_password = args.password
+    else:
+        ARCHIVE_PASSWORD_FILE_NAME = args.password_file
     global ARCHIVE_PASSWORD_NONE
     ARCHIVE_PASSWORD_NONE = args.nopassword
-    encrypt(args.filename)
+    try:
+        if args.recursive:
+            results = theLockLib.encryptRecursively(args.filename, getRsaKey(),
+                args.output, outputExtension=args.extension, override=args.force,
+                archivePassword=getArchivePassword(),
+                compressionLevel=args.archive_compression_level,
+                archivePartSize=args.part_size*1024*1024,
+                tmpFolderName=TMP_FOLDER_NAME, extensionsToSkip=args.skip)
+            if args.verbose or args.verbose_all or args.verbose_pretty:
+                for src, path, updated in results:
+                    if args.verbose_pretty:
+                        if updated == 0:
+                            print(f'{src} -> {path} (encrypted)')
+                        elif updated == 1:
+                            print(f'{src} -> {path} (already exists - skipped)')
+                        elif updated == 2:
+                            print(f"{src} (skipped due to it's suffix)")
+                        else:
+                            print(f"{src} -> {path}")
+                    elif updated == 0 or args.verbose_all:
+                        print(path)
+        else:
+            target = f"{args.output}{args.extension}"
+            result = theLockLib.encrypt(args.filename, getRsaKey(),
+                target,
+                override=args.force, archivePassword=getArchivePassword(),
+                compressionLevel=args.archive_compression_level,
+                archivePartSize=args.part_size*1024*1024,
+                tmpFolderName=TMP_FOLDER_NAME)
+            if args.verbose_pretty:
+                if result:
+                    print(f"{args.filename} -> {target} (encrypted)")
+                else:
+                    print(f"{args.filename} -> {target} (already exists - skipped)")
+            elif args.verbose_all or result and args.verbose:
+                print(target)
+    except FileNotFoundError as e:
+        print(str(e))
+    except FileExistsError as e:
+        print(str(e))
+    except PermissionError as e:
+        print(str(e))
+        print("Possible cause: file is opened")
+    except Exception as e:
+        print("Unhandled exception:")
+        print(str(e))
+    theLockLib.deleteTmpFolder(TMP_FOLDER_NAME)
     
 
 if __name__ == "__main__":

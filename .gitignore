@@ -4,3 +4,7 @@ password
 dist
 build
 *.spec
+*.bat
+test
+*.encrypted
+__pycache__
