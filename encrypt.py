@@ -4,6 +4,7 @@ import rsa
 import argparse
 import theLockLib
 import pyperclip
+from datetime import datetime
 
 
 # Script Location
@@ -163,6 +164,8 @@ def encryption(args: Atributes) -> None:
                 elif updated == 0 or args.verbose_all:
                     print(path)
     else:
+        if args.output is None:
+            args.output = args.filename
         target = f"{args.output}{args.extension}"
         result = theLockLib.encrypt(args.filename, getRsaKey(),
             target,
@@ -179,18 +182,53 @@ def encryption(args: Atributes) -> None:
             print(target)
 
 
+def fileDecryptionPrettyVerbose(files: list[(str, int)]) -> None:
+    for file, code in files:
+        print(file, end=' ')
+        if code == 0:
+            print()
+        elif code == 1:
+            print("- skipped (already decrypted)")
+
+
+def decryptionPrettyVerbose(src: str, dst: list[str] | None,
+                            code: int, time: int | None) -> None:
+    if code == 0:
+        print(f"File {src} has been decrypted. It has been encrypted on:",
+            datetime.fromtimestamp(time).strftime("%d-%m-%Y %H:%M:%S"))
+        print('It contained:')
+        fileDecryptionPrettyVerbose(dst)
+    elif code == 1:
+        print(f"File {src} has been skipped (already decrypted)")
+        print('It contained:')
+        fileDecryptionPrettyVerbose(dst)
+    elif code == 2:
+        print(f"File {src} has been skipped because it doesn't have desired extension")
+    print()
+
+
 def decryption(args: Atributes) -> None:
     if args.recursive:
-        pass
+        results = theLockLib.decryptRecursively(args.filename, getRsaKey(True),
+            args.output, tmpFolderName=args.temporary_folder, override=args.force,
+            archivePassword=getArchivePassword(),encryptedFilesExtension=args.extension)
+        for src, dst, code, time in results:
+            decryptionPrettyVerbose(src, dst, code, time)
     else:
-        theLockLib.decrypt(args.filename, getRsaKey(True), args.output,
+        filelist, time = theLockLib.decrypt(args.filename, getRsaKey(True), args.output,
             tmpFolderName=args.temporary_folder, override=args.force,
             archivePassword=getArchivePassword())
+        if args.verbose_pretty:
+            decryptionPrettyVerbose(args.filename, filelist, 0, time)
+        if args.verbose or args.verbose_all:
+            for file, code in filelist:
+                if args.verbose_all or code == 0:
+                    print(file)
 
 
 def main() -> None:
     args = parseArgs()
-    args.filename = os.path.normpath(args.filename)
+    args.filename = os.path.normpath(args.filename.strip('"'))
     if not os.path.exists(args.filename):
         print('No such file or directory exists')
         return
