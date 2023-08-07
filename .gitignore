@@ -10,3 +10,5 @@ test2
 test3
 *.encrypted
 __pycache__
+key_gen.py
+decrypt.py

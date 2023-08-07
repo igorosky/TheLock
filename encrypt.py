@@ -55,8 +55,8 @@ def parseArgs() -> Atributes:
     parser.add_argument('-f', '--force', action='store_true',
         help="Override existing files")
     parser.add_argument('-g', '--generate-keys', type=int, action='store',
-        help='Generete public/private key pare of given size\
-            and they are saved to filename.pub/filename.priv')
+        help='Generete public/private key pare of given size ' +
+        'and they are saved to filename.pub/filename.priv')
     parser.add_argument('-k', '--skip', action='store', type=list[str], nargs='*',
         default=[FINAL_EXTENSION], help="Skip files with given suffixes")
     parser.add_argument('-o', '--output', type=str, action='store',
