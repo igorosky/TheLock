@@ -43,7 +43,8 @@ class Atributes:
 
 def parseArgs() -> Atributes:
     parser = argparse.ArgumentParser()
-    parser.add_argument('filename', type=str, help="File or folder to encrypt")
+    parser.add_argument('filename', type=str, help="File or folder to" +
+        "encrypt/decrypt/save key")
     parser.add_argument('-c', '--archive-compression-level', type=int, action='store',
         default=COMPRESSION_LEVEL,
         help=f"Level of compression 0-9 (default: {COMPRESSION_LEVEL})")
