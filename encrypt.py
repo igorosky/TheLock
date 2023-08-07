@@ -13,7 +13,7 @@ if getattr(sys, 'frozen', False):
     SL = os.path.dirname(sys.executable)
 
 
-ARCHIVE_PART_SIZE = 512
+ARCHIVE_PART_SIZE = 256
 
 TMP_FOLDER_NAME = os.path.normpath(f"{SL}/tmp")
 FINAL_EXTENSION = ".encrypted"
@@ -53,23 +53,25 @@ def parseArgs() -> Atributes:
         default=FINAL_EXTENSION,
         help=f"File suffix added to encrypted files (default: {FINAL_EXTENSION})")
     parser.add_argument('-f', '--force', action='store_true',
-        help="Rencrypt files and override encrypted files")
+        help="Override existing files")
     parser.add_argument('-g', '--generate-keys', type=int, action='store',
         help='Generete public/private key pare of given size\
             and they are saved to filename.pub/filename.priv')
     parser.add_argument('-k', '--skip', action='store', type=list[str], nargs='*',
         default=[FINAL_EXTENSION], help="Skip files with given suffixes")
     parser.add_argument('-o', '--output', type=str, action='store',
-        help="Target file or folder in case of recursion")
-    parser.add_argument('-p', '--password', type=str, help="Password", action='store')
+        help="Target file or folder in case of recursion and decryption")
+    parser.add_argument('-p', '--password', type=str, action='store',
+        help="Password used for encryption/decryption")
     parser.add_argument('-pf', '--password-file', type=str, action='store',
-        help="File with password")
+        help="File with password used for encryption/decryption")
     parser.add_argument('-r', '--recursive', action='store_true',
-        help="Instead encypting whole folder encrypt every file in it")
+        help="Instead encypting whole folder encrypt every file in it" +
+        "(in case of decryptio decrypt every encrypted file in designated folder)")
     parser.add_argument('-rc', '--rsa-from-clipboard', action='store_true',
         help='Take RSA key from clipboard')
     parser.add_argument('-rsa', '--rsa-key-file', type=str, action='store',
-        help='File with RSA key')
+        help='File with RSA key used for encryption/decryption')
     parser.add_argument('-s', '--part-size', type=int, action='store',
         default=ARCHIVE_PART_SIZE,
         help=f"Max size of one file part in MB (default: {ARCHIVE_PART_SIZE}MB)")
@@ -77,11 +79,12 @@ def parseArgs() -> Atributes:
         default=TMP_FOLDER_NAME, help='Temporary folder location - ' + 
         f'it should not exists (default: {TMP_FOLDER_NAME})')
     parser.add_argument('-v', '--verbose', action='store_true',
-        help="Verbose mode that print affected files")
+        help="Verbose mode that prints affected files")
     parser.add_argument('-va', '--verbose-all', action='store_true',
-        help="Verbose mode that print more information")
+        help="Verbose mode that prints affected files and those which are" +
+        "not affected because they already exist")
     parser.add_argument('-vp', '--verbose-pretty', action='store_true',
-        help="Verbose mode that print more information")
+        help="Verbose mode that prints more, readable information")
     ans = Atributes()
     parser.parse_args(namespace=ans)
     return ans
