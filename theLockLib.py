@@ -6,7 +6,102 @@ import shutil
 import zipfile
 import sys
 import multiprocessing
+from typing import Tuple
+from enum import Enum
 
+
+# Results
+class SymmertricEncryptResult:
+    key: bytes
+    createdFilesList: list[str]
+    manifestFile: str | None
+    keyFile: str | None
+
+    def __init__(self, key: bytes, createdFilesList: list[str], *,
+                 manifestFile: str | None = None, keyFile: str | None = None):
+        self.key = key
+        self.createdFilesList = createdFilesList
+        self.keyFile = keyFile
+        self.manifestFile = manifestFile
+
+
+class SymmetricDecryptResult:
+    outputFile: str
+    encryptionTime: int
+
+    def __init__(self, outputFile: str, encryptionTime: int) -> None:
+        self.encryptionTime = encryptionTime
+        self.outputFile = outputFile
+
+
+class ResultCode(Enum):
+    DONE = 0
+    EXISTS = 1
+    EXTENSION_SKIP = 2
+    NO_DECRYPTION_KEY = 3
+
+
+class EncryptedFile:
+    filename: str
+    code: ResultCode
+
+    def __init__(self, filename: str, code: ResultCode = ResultCode.DONE) -> None:
+        self.filename = filename
+        self.code = code
+
+
+class EncryptionResult:
+    sourceFiles: list[str]
+    filename: str
+    code: ResultCode
+
+    def __init__(self, sourceFiles: list[str], filename: str,
+                 code: ResultCode = ResultCode.DONE) -> None:
+        self.code = code
+        self.sourceFiles = sourceFiles
+        self.filename = filename
+
+
+class DecryptedFile:
+    filename: str
+    code: ResultCode
+
+    def __init__(self, filename: str, code: ResultCode = ResultCode.DONE) -> None:
+        self.filename = filename
+        self.code = code
+
+
+class DecryptionResult:
+    sourceFile: str
+    fileList: list[DecryptedFile]
+    encryptionTime: int | None
+    code: ResultCode
+
+    def __init__(self, sourceFile: str, encryptionTime: int | None = None, *,
+                 code: ResultCode = ResultCode.DONE) -> None:
+        self.encryptionTime = encryptionTime
+        self.fileList = list()
+        self.sourceFile = sourceFile
+        self.code = code
+
+    def addFile(self, file: DecryptedFile) -> None:
+        self.fileList.append(file)
+    
+
+
+# Exceptions
+class NonASCIIStringError(Exception):
+    pass
+
+class NotAFileError(Exception):
+    pass
+
+class NoSymmetricKeyError(Exception):
+    pass
+
+
+
+# Actual source
 
 if getattr(sys, 'frozen', False):
     multiprocessing.freeze_support()
@@ -14,8 +109,8 @@ if getattr(sys, 'frozen', False):
 
 def genRSAKeyToFiles(size: int = 2048, *, public_key_file: str | None = None,
                 private_key_file: str | None = None, override: bool = False
-                ) -> (rsa.PublicKey, rsa.PrivateKey):
-    (pub, priv) = rsa.newkeys(size, poolsize=os.cpu_count())
+                ) -> Tuple[rsa.PublicKey, rsa.PrivateKey]:
+    pub, priv = rsa.newkeys(size, poolsize=os.cpu_count())
     if private_key_file is not None:
         if os.path.exists(private_key_file) and not override:
             raise FileExistsError(f"File {private_key_file} already exists")
@@ -98,7 +193,7 @@ def symeticEncrypt(path: str, dstFolder: str, *,
         keyPath: str | None = None, manifestFileName: str | None = None,
         archivePartSize: int = 512*1024*1024, createManifestFile: bool = False,
         createKeyFile: bool = False, keySrc: bytes | None = None,
-        override: bool = False) -> (bytes, list[str]):
+        override: bool = False) -> SymmertricEncryptResult:
     ans = list()
     if createManifestFile and manifestFileName is None:
         manifestFileName = \
@@ -108,7 +203,6 @@ def symeticEncrypt(path: str, dstFolder: str, *,
     if manifestFileName is not None:
         createManifestFile = True
         isPathAvailable(manifestFileName, override)
-        ans.append(manifestFileName)
     if createKeyFile and keyPath is None:
         keyPath = f'{dstFolder}/{os.path.basename(path)}.key'
     key = keySrc
@@ -116,7 +210,7 @@ def symeticEncrypt(path: str, dstFolder: str, *,
         key = Fernet.generate_key()
     if keyPath is not None:
         isPathAvailable(keyPath, override)
-        ans.append(os.path.normpath(keyPath))
+        keyPath = os.path.normpath(keyPath)
         with open(keyPath, 'wb') as file:
             file.write(key)
     fernet = Fernet(key)
@@ -133,16 +227,18 @@ def symeticEncrypt(path: str, dstFolder: str, *,
             i += 1
     if createManifestFile:
         with open(manifestFileName, 'w') as file:
-            for x in ans[1:]:
+            file.write(f'{os.path.basename(keyPath)}\n')
+            for x in ans:
                 file.write(f'{os.path.basename(x)}\n')
-    return key, ans
+    return SymmertricEncryptResult(key, ans,
+                manifestFile=manifestFileName,keyFile=keyPath)
 
 
 def symeticDecrypt(path: str | list[str], dstPath: str, *,
         keySrc: bytes | str | None = None,
-        pathToFiles: str | None = None) -> (str, int):
+        pathToFiles: str | None = None) -> SymmetricDecryptResult:
     if type(path) is list[str] and keySrc is None:
-        raise Exception('No key provided')
+        raise NoSymmetricKeyError('No key provided')
     if type(path) is str:
         srcDir = os.path.dirname(path)
         with open(path, 'r') as file:
@@ -168,7 +264,7 @@ def symeticDecrypt(path: str | list[str], dstPath: str, *,
                 content = partFile.read()
                 time = min(fernet.extract_timestamp(content), time)
                 outputFile.write(fernet.decrypt(content))
-    return dstPath, time
+    return SymmetricDecryptResult(dstPath, time)
 
 
 def asyncEncrypt(path: str, rsaKey: rsa.PublicKey,
@@ -195,70 +291,78 @@ def asyncDecrypt(path: str, rsaKey: rsa.PrivateKey,
     return os.path.normpath(output)
 
 
-class NonASCIIString(Exception):
-    pass
-
-
-def encryptFile(path: str, rsaPublicKey: rsa.PublicKey,
+def encryptFile(path: str, rsaPublicKey: rsa.PublicKey | None = None,
                 output: str | None = None, *,
                 tmpFolderName: str = 'tmp', override: bool = False,
                 archivePassword: str | None = None, compressionLevel: int = 9,
                 noCompression: bool = False,
-                archivePartSize: int = 512*1024*1024) -> None:
+                archivePartSize: int = 512*1024*1024) -> EncryptedFile:
     if archivePassword is not None and \
         (any(ord(c) > 127 for c in path) or any(ord(c) > 127 for c in output)):
-        raise NonASCIIString(
+        raise NonASCIIStringError(
             "Path or output contain non ascii character and the password is not None")
     if output is None:
         output = path
     if not override and os.path.exists(output):
-        raise FileExistsError(f"File with name: {output} already exists")
+        # raise FileExistsError(f"File with name: {output} already exists")
+        return EncryptedFile(output, ResultCode.EXISTS)
     prepareTmpFolder(tmpFolderName, forceDelete=override)
     os.mkdir(f'{tmpFolderName}/content')
-    _, files = symeticEncrypt(path, keyPath=f'{tmpFolderName}/key',
+    result = symeticEncrypt(path, keyPath=f'{tmpFolderName}/key',
                 dstFolder=f'{tmpFolderName}/content', archivePartSize=archivePartSize,
                 manifestFileName='manifest')
-    asyncEncrypt(files[1], rsaPublicKey)
     try:
         d = os.path.dirname(output)
         if d != '':
             os.makedirs(d)
     except FileExistsError:
         pass
-    locations = ['/content/' for _ in files]
-    locations[0] = locations[0].removeprefix('/content')
-    locations[1] = locations[1].removeprefix('/content')
+    if rsaPublicKey is None:
+        if not override and os.path.exists(f'{output}.key'):
+            raise FileExistsError(f'File: {output}.key, already exists')
+        rsaPublicKey, _ = genRSAKeyToFiles(override=override,
+                                           private_key_file=f'{output}.priv')
+    asyncEncrypt(result.keyFile, rsaPublicKey)
+    result.createdFilesList.append(result.keyFile)
+    result.createdFilesList.append(result.manifestFile)
+    locations = ['/content/' for _ in result.createdFilesList]
+    locations[-1] = locations[-1].removeprefix('/content')
+    locations[-2] = locations[-2].removeprefix('/content')
     if archivePassword is None:
         compression = zipfile.ZIP_DEFLATED
         if noCompression:
             compression = zipfile.ZIP_STORED
         with zipfile.ZipFile(output, 'w',
             compression=compression, compresslevel=compressionLevel) as file:
-            for p, q in zip(files, locations):
+            for p, q in zip(result.createdFilesList, locations):
                 file.write(p, f'{q}{os.path.basename(p)}')
     else:
         pyminizip.compress_multiple(
-            files,
+            result.createdFilesList,
             locations,
             output,
             archivePassword,
             compressionLevel
         )
     deletePath(tmpFolderName)
+    return EncryptedFile(output, ResultCode.DONE)
 
 
-def decryptFile(path: str, rsaPrivateKey: rsa.PrivateKey,
+def decryptFile(path: str, rsaPrivateKey: rsa.PrivateKey | None = None,
                 output: str | None = None, *,
                 tmpFolderName: str = 'tmp', override: bool = False,
-                archivePassword: str | None = None) -> (str, int):
+                archivePassword: str | None = None) -> SymmetricDecryptResult:
     if output is None:
         output = os.path.dirname(path)
     if not override and os.path.exists(output):
         raise FileExistsError(f"File with name: {output} already exists")
     prepareTmpFolder(tmpFolderName)
     with zipfile.ZipFile(path) as file:
-        file.setpassword(bytes(archivePassword, 'utf-8'))
+        if archivePassword is not None:
+            file.setpassword(bytes(archivePassword, 'utf-8'))
         file.extractall(tmpFolderName)
+    if rsaPrivateKey is None:
+        rsaPrivateKey = getRsaPrivateKeyFromFile(f'{file}.priv')
     asyncDecrypt(f'{tmpFolderName}/key', rsaPrivateKey)
     ans = symeticDecrypt(f'{tmpFolderName}/manifest', output,
                    pathToFiles=f'{tmpFolderName}/content')
@@ -278,79 +382,74 @@ def getFileTree(path: str) -> list[str]:
     return ans
 
 
-def encrypt(path: str, rsaPublicKey: rsa.PublicKey,
+def encrypt(paths: list[str], rsaPublicKey: rsa.PublicKey | None = None,
                 output: str | None = None, *,
                 tmpFolderName: str = 'tmp',
                 wrapperName: str = 'wrapper',
                 override: bool = False, archivePassword: str | None = None,
                 compressionLevel: int = 9, noCompression: bool = False,
-                archivePartSize: int = 512*1024*1024) -> bool:
+                archivePartSize: int = 512*1024*1024) -> EncryptionResult:
     if output is None:
-        output = path
+        output = paths[0]
     if not override and os.path.exists(output):
-        return False
-    path = os.path.normpath(path)
-    fileTree = getFileTree(path)
+        return EncryptionResult(paths, output, ResultCode.EXISTS)
     prepareTmpFolder(tmpFolderName, forceDelete=override)
     wrapperFile = f"{tmpFolderName}/{wrapperName}"
     with zipfile.ZipFile(wrapperFile, 'w',
         compression=zipfile.ZIP_DEFLATED, compresslevel=compressionLevel) as file:
-        for p in fileTree:
-            file.write(p, p.removeprefix(os.path.dirname(path)))
-    encryptFile(wrapperFile, rsaPublicKey, output, tmpFolderName=f"{tmpFolderName}/0",
+        for path in paths:
+            path = os.path.normpath(path)
+            fileTree = getFileTree(path)
+            for p in fileTree:
+                file.write(p, p.removeprefix(os.path.dirname(path)))
+    _ = encryptFile(wrapperFile, rsaPublicKey, output,
+                tmpFolderName=f"{tmpFolderName}/0",
                 archivePassword=archivePassword,
                 compressionLevel=compressionLevel,
                 noCompression=noCompression, override=override,
                 archivePartSize=archivePartSize)
     deletePath(tmpFolderName)
-    return True
+    return EncryptionResult(paths, output, ResultCode.DONE)
 
 
-def decrypt(path: str, rsaPrivateKey: rsa.PrivateKey,
+def decrypt(path: str, rsaPrivateKey: rsa.PrivateKey | None = None,
                 output: str | None = None, *,
                 tmpFolderName: str = 'tmp',
                 override: bool = False,
-                archivePassword: str | None = None) -> (list[(str, int)], int | None):
+                archivePassword: str | None = None
+                ) -> DecryptionResult:
     if output is None:
         output = os.path.dirname(os.path.abspath(path))
     if not os.path.isfile(path):
-        raise Exception('Not a file')
+        raise NotAFileError(f'{path} is not a file')
     prepareTmpFolder(tmpFolderName)
-    _, time = decryptFile(path, rsaPrivateKey, f'{tmpFolderName}/wrapper',
+    result = decryptFile(path, rsaPrivateKey, f'{tmpFolderName}/wrapper',
                 tmpFolderName=f'{tmpFolderName}/0',
                 override=override, archivePassword=archivePassword)
+    ans = DecryptionResult(path, result.encryptionTime)
     with zipfile.ZipFile(f'{tmpFolderName}/wrapper') as file:
-        file.setpassword(bytes(archivePassword, 'utf-8'))
+        if archivePassword is not None:
+            file.setpassword(bytes(archivePassword, 'utf-8'))
         filelist = list()
-        filelistAns = list()
-        if override:
-            filelist = file.namelist()
-            filelistAns = [(f, 0) for f in filelist]
-        else:
-            for f in file.namelist():
-                if not os.path.exists(f'{output}/{f}'):
-                    filelist.append(f)
-                    filelistAns.append((f, 0))
-                else:
-                    filelistAns.append((f, 1))
+        for f in file.namelist():
+            if override or not os.path.exists(f'{output}/{f}'):
+                filelist.append(f)
+                ans.addFile(DecryptedFile(f, ResultCode.DONE))
+            else:
+                ans.addFile(DecryptedFile(f, ResultCode.EXISTS))
         file.extractall(output, filelist)
     deletePath(tmpFolderName)
-    return filelistAns, time
+    return ans
 
 
-# codes
-# 0 encrypted
-# 1 already encrypted
-# 2 skipped due to extension
-# @ret (src, dst, code)
-def encryptRecursively(path: str, rsaPublicKey: rsa.PublicKey,
+def encryptRecursively(path: str, rsaPublicKey: rsa.PublicKey | None = None,
                         output: str | None = None, *, tmpFolderName: str = 'tmp',
                         outputExtension: str = '.encrypted',
                         override: bool = False, archivePassword: str | None = None,
                         compressionLevel: int = 9, noCompression: bool = False,
                         archivePartSize: int = 512*1024*1024,
                         extensionsToSkip: list[str] | None = None
-                        ) -> list[(str, str, int)]:
+                        ) -> list[EncryptionResult]:
     fileTree = getFileTree(path)
     if output is None:
         output = path
@@ -360,26 +459,20 @@ def encryptRecursively(path: str, rsaPublicKey: rsa.PublicKey,
         target = os.path.normpath(f"{output}/{fileRelative}{outputExtension}")
         if extensionsToSkip is not None and \
             any(e == file[-len(e):] for e in extensionsToSkip):
-            ans.append((file, target, 2))
+            ans.append(EncryptionResult(file, target, ResultCode.EXTENSION_SKIP))
             continue
-        ans.append((file, target,
-                not encrypt(file, rsaPublicKey, target, archivePassword=archivePassword,
-                override=override, compressionLevel=compressionLevel,
-                noCompression=noCompression, archivePartSize=archivePartSize,
-                tmpFolderName=tmpFolderName)))
+        ans.append(encrypt([file], rsaPublicKey, target,
+                archivePassword=archivePassword,override=override,
+                compressionLevel=compressionLevel, noCompression=noCompression,
+                archivePartSize=archivePartSize, tmpFolderName=tmpFolderName))
     return ans
 
 
-# codes
-# 0 decrypted
-# 1 already decrypted
-# 2 skipped due to extension
-# @ret (src, dst, code, encryptionTime)
-def decryptRecursively(path: str, rsaPrivateKey: rsa.PrivateKey,
+def decryptRecursively(path: str, rsaPrivateKey: rsa.PrivateKey | None = None,
                         output: str | None = None, *, tmpFolderName: str = 'tmp',
                         encryptedFilesExtension: str = '.encrypted',
                         override: bool = False, archivePassword: str | None = None
-                        ) -> list[(str, list[(str, int)] | None, int, int | None)]:
+                        ) -> list[DecryptionResult]:
     fileTree = getFileTree(path)
     if output is None:
         output = path
@@ -388,12 +481,15 @@ def decryptRecursively(path: str, rsaPrivateKey: rsa.PrivateKey,
         fileRelative = file.removeprefix(os.path.normpath(path))
         target = os.path.normpath(f"{output}/{fileRelative}")
         if encryptedFilesExtension != file[-len(encryptedFilesExtension):]:
-            ans.append((file, None, 2, None))
+            ans.append(DecryptionResult(file, None, code=ResultCode.EXTENSION_SKIP))
             continue
         target = target[:-len(encryptedFilesExtension)]
-        decryptedFiles, time = decrypt(file, rsaPrivateKey, os.path.dirname(target),
-            archivePassword=archivePassword, override=override,
-            tmpFolderName=tmpFolderName)
-        ans.append((file, decryptedFiles,
-            decryptedFiles == 0, time))
+        rsaKey = rsaPrivateKey
+        try:
+            decryptedFiles = decrypt(file, rsaKey, os.path.dirname(target),
+                archivePassword=archivePassword, override=override,
+                tmpFolderName=tmpFolderName)
+            ans.append(decryptedFiles)
+        except FileNotFoundError:
+            ans.append(DecryptionResult(file, None, code=ResultCode.NO_DECRYPTION_KEY))
     return ans
