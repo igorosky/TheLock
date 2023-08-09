@@ -16,7 +16,7 @@ ARCHIVE_PART_SIZE = 256
 
 TMP_FOLDER_NAME = os.path.normpath(f"{SL}/tmp")
 FINAL_EXTENSION = ".encrypted"
-COMPRESSION_LEVEL = 9
+COMPRESSION_LEVEL = 0
 
 
 class Atributes:
