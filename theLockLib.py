@@ -528,7 +528,7 @@ def decryptFile(path: str, rsaPrivateKey: rsa.RSAPrivateKey | None = None,
             file.setpassword(archivePassword)
         file.extractall(tmpFolderName)
     if rsaPrivateKey is None:
-        rsaPrivateKey = getRsaPrivateKeyFromFile(f'{file}.priv',
+        rsaPrivateKey = getRsaPrivateKeyFromFile(f'{path}.priv',
                             password=rsaKeyPassword)
     asyncDecrypt(f'{tmpFolderName}/key', rsaPrivateKey)
     ans = symeticDecrypt(f'{tmpFolderName}/manifest', output,
@@ -664,4 +664,5 @@ def decryptRecursively(path: str, rsaPrivateKey: rsa.RSAPrivateKey | None = None
                 verificationKey=verificationKey)
             yield decryptedFiles
         except FileNotFoundError:
+            deletePath(tmpFolderName)
             yield DecryptionResult(file, None, code=ResultCode.NO_DECRYPTION_KEY)
